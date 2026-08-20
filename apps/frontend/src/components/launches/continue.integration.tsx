@@ -270,6 +270,8 @@ export const ContinueIntegration: FC<{
       gmb: 'Google Business',
       tumblr: 'Tumblr',
       'tiktok-business': 'TikTok Business',
+      vk: 'VK',
+      okru: 'Одноклассники',
     };
     return names[provider] || provider;
   }, [provider]);

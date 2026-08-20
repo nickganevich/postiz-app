@@ -1,5 +1,6 @@
 import {
   AuthTokenDetails,
+  FetchPageInformationResult,
   PostDetails,
   PostResponse,
   SocialProvider,
@@ -17,7 +18,8 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
   override maxConcurrentJob = 2; // VK has moderate API limits
   identifier = 'vk';
   name = 'VK';
-  isBetweenSteps = false;
+  // После OAuth пользователь выбирает, куда постить: личная страница или сообщество.
+  isBetweenSteps = true;
   scopes = [
     'vkid.personal_info',
     'email',
@@ -26,6 +28,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     'docs',
     'photos',
     'video',
+    'groups',
   ];
 
   editor = 'normal' as const;
@@ -159,18 +162,116 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     };
   }
 
+  // internalId интеграции: положительный — личная страница, `-<gid>` — сообщество
+  private groupId(userId: string): string | null {
+    return String(userId).startsWith('-') ? String(userId).slice(1) : null;
+  }
+
+  async pages(accessToken: string) {
+    const { response: users } = await (
+      await this.fetch(
+        `https://api.vk.com/method/users.get?fields=photo_200&v=5.251&access_token=${accessToken}`
+      )
+    ).json();
+    const [me] = users || [];
+
+    const { response: groups } = await (
+      await this.fetch(
+        `https://api.vk.com/method/groups.get?extended=1&filter=admin,editor&fields=photo_200&v=5.251&access_token=${accessToken}`
+      )
+    ).json();
+
+    return [
+      ...(me
+        ? [
+            {
+              id: String(me.id),
+              name: `${me.first_name} ${me.last_name} — личная страница`,
+              picture: { data: { url: me.photo_200 || '' } },
+            },
+          ]
+        : []),
+      ...(groups?.items || []).map((group: any) => ({
+        id: `-${group.id}`,
+        name: group.name,
+        picture: { data: { url: group.photo_200 || '' } },
+      })),
+    ];
+  }
+
+  async fetchPageInformation(
+    accessToken: string,
+    data: { page: string }
+  ): Promise<FetchPageInformationResult> {
+    const id = String(data.page);
+    const gid = this.groupId(id);
+
+    if (gid) {
+      const { response } = await (
+        await this.fetch(
+          `https://api.vk.com/method/groups.getById?group_id=${gid}&fields=photo_200&v=5.251&access_token=${accessToken}`
+        )
+      ).json();
+      // v5.251 возвращает { groups: [...] }, старые версии — массив
+      const group = response?.groups?.[0] || response?.[0];
+      return {
+        id,
+        name: group?.name || `Сообщество ${gid}`,
+        access_token: accessToken,
+        picture: group?.photo_200 || '',
+        username: group?.screen_name || '',
+      };
+    }
+
+    const { response } = await (
+      await this.fetch(
+        `https://api.vk.com/method/users.get?user_ids=${id}&fields=photo_200,screen_name&v=5.251&access_token=${accessToken}`
+      )
+    ).json();
+    const [user] = response || [];
+    return {
+      id,
+      name: user ? `${user.first_name} ${user.last_name}` : id,
+      access_token: accessToken,
+      picture: user?.photo_200 || '',
+      username: user?.screen_name || '',
+    };
+  }
+
+  async reConnect(
+    id: string,
+    requiredId: string,
+    accessToken: string
+  ): Promise<Omit<AuthTokenDetails, 'refreshToken' | 'expiresIn'>> {
+    const information = await this.fetchPageInformation(accessToken, {
+      page: requiredId,
+    });
+    return {
+      id: information.id,
+      name: information.name,
+      accessToken: information.access_token,
+      picture: information.picture,
+      username: information.username,
+    };
+  }
+
   private async uploadMedia(
     userId: string,
     accessToken: string,
     post: PostDetails
-  ): Promise<{ id: string; type: string }[]> {
+  ): Promise<{ id: string; type: string; owner: string }[]> {
+    const gid = this.groupId(userId);
     return await Promise.all(
       (post?.media || []).map(async (media) => {
         const all = await (
           await this.fetch(
             hasExtension(media.path, 'mp4')
-              ? `https://api.vk.com/method/video.save?access_token=${accessToken}&v=5.251`
-              : `https://api.vk.com/method/photos.getWallUploadServer?owner_id=${userId}&access_token=${accessToken}&v=5.251`
+              ? `https://api.vk.com/method/video.save?access_token=${accessToken}&v=5.251${
+                  gid ? `&group_id=${gid}` : ''
+                }`
+              : `https://api.vk.com/method/photos.getWallUploadServer?access_token=${accessToken}&v=5.251${
+                  gid ? `&group_id=${gid}` : `&owner_id=${userId}`
+                }`
           )
         ).json();
 
@@ -201,6 +302,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
           return {
             id: all.response.video_id,
             type: 'video',
+            owner: String(all.response.owner_id ?? userId),
           };
         }
 
@@ -209,10 +311,12 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
         formSend.append('server', value.server);
         formSend.append('hash', value.hash);
 
-        const { id } = (
+        const { id, owner_id } = (
           await (
             await fetch(
-              `https://api.vk.com/method/photos.saveWallPhoto?access_token=${accessToken}&v=5.251`,
+              `https://api.vk.com/method/photos.saveWallPhoto?access_token=${accessToken}&v=5.251${
+                gid ? `&group_id=${gid}` : ''
+              }`,
               {
                 method: 'POST',
                 body: formSend,
@@ -224,6 +328,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
         return {
           id,
           type: 'photo',
+          owner: String(owner_id ?? userId),
         };
       })
     );
@@ -241,11 +346,15 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
 
     const body = new FormData();
     body.append('message', firstPost.message);
+    body.append('owner_id', String(userId));
+    if (this.groupId(userId)) {
+      body.append('from_group', '1');
+    }
 
     if (mediaList.length) {
       body.append(
         'attachments',
-        mediaList.map((p) => `${p.type}${userId}_${p.id}`).join(',')
+        mediaList.map((p) => `${p.type}${p.owner}_${p.id}`).join(',')
       );
     }
 
@@ -263,7 +372,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
       {
         id: firstPost.id,
         postId: String(response?.post_id),
-        releaseURL: `https://vk.com/feed?w=wall${userId}_${response?.post_id}`,
+        releaseURL: `https://vk.com/wall${userId}_${response?.post_id}`,
         status: 'completed',
       },
     ];
@@ -285,11 +394,15 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     const body = new FormData();
     body.append('message', commentPost.message);
     body.append('post_id', postId);
+    body.append('owner_id', String(userId));
+    if (this.groupId(userId)) {
+      body.append('from_group', '1');
+    }
 
     if (mediaList.length) {
       body.append(
         'attachments',
-        mediaList.map((p) => `${p.type}${userId}_${p.id}`).join(',')
+        mediaList.map((p) => `${p.type}${p.owner}_${p.id}`).join(',')
       );
     }
 

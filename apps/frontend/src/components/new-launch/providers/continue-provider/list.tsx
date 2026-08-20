@@ -6,8 +6,12 @@ import { LinkedinContinue } from '@gitroom/frontend/components/new-launch/provid
 import { GmbContinue } from '@gitroom/frontend/components/new-launch/providers/continue-provider/gmb/gmb.continue';
 import { YoutubeContinue } from '@gitroom/frontend/components/new-launch/providers/continue-provider/youtube/youtube.continue';
 import { TumblrContinue } from '@gitroom/frontend/components/new-launch/providers/continue-provider/tumblr/tumblr.continue';
+import { OkruContinue } from '@gitroom/frontend/components/new-launch/providers/continue-provider/okru/okru.continue';
+import { VkContinue } from '@gitroom/frontend/components/new-launch/providers/continue-provider/vk/vk.continue';
 
 export const continueProviderList = {
+  okru: OkruContinue,
+  vk: VkContinue,
   instagram: InstagramContinue,
   facebook: FacebookContinue,
   'linkedin-page': LinkedinContinue,
