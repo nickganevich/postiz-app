@@ -115,7 +115,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     code: string;
     codeVerifier: string;
     refresh?: string;
-  }) {
+  }): Promise<AuthTokenDetails | string> {
     const [code, device_id] = params.code.split('&&&&');
 
     const formData = new FormData();
