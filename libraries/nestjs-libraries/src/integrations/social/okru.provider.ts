@@ -280,6 +280,25 @@ export class OkruProvider extends SocialAbstract implements SocialProvider {
     }));
   }
 
+  // Восстановление привязки к группе при переподключении канала (refresh):
+  // без этого общий код сравнит uid пользователя с gid группы и откажет.
+  async reConnect(
+    id: string,
+    requiredId: string,
+    accessToken: string
+  ): Promise<Omit<AuthTokenDetails, 'refreshToken' | 'expiresIn'>> {
+    const information = await this.fetchPageInformation(accessToken, {
+      group: requiredId,
+    });
+    return {
+      id: information.id,
+      name: information.name,
+      accessToken: information.access_token,
+      picture: information.picture,
+      username: information.username,
+    };
+  }
+
   async fetchPageInformation(
     accessToken: string,
     data: { group: string }

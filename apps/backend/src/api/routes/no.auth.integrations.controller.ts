@@ -136,7 +136,14 @@ export class NoAuthIntegrationsController {
               refresh,
               auth.accessToken
             );
-            return res({ ...newAuth, refreshToken: body.refresh });
+            // сохраняем настоящий refresh-токен и срок жизни access-токена
+            // из authenticate(): иначе для провайдеров с ротацией токенов (VK)
+            // в БД попадёт internalId вместо refresh-токена и вечный expiration
+            return res({
+              ...newAuth,
+              refreshToken: auth.refreshToken || body.refresh,
+              expiresIn: auth.expiresIn,
+            });
           } catch (err: any) {
             return res({
               error: err.message,

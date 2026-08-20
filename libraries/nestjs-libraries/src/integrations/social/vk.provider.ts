@@ -67,7 +67,9 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     ).json();
 
     return {
-      id: user_id,
+      // префикс "u", чтобы pending-запись не совпала по internalId с уже
+      // подключённым каналом (личным "u<id>"/легаси "<id>" или "-<gid>")
+      id: `u${user_id}`,
       name: first_name + ' ' + last_name,
       accessToken: access_token,
       refreshToken: refresh_token + '&&&&' + device_id,
@@ -152,7 +154,9 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     ).json();
 
     return {
-      id: user_id,
+      // префикс "u", чтобы pending-запись не совпала по internalId с уже
+      // подключённым каналом (личным "u<id>"/легаси "<id>" или "-<gid>")
+      id: `u${user_id}`,
       name: first_name + ' ' + last_name,
       accessToken: access_token,
       refreshToken: refresh_token + '&&&&' + device_id,
@@ -162,9 +166,16 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     };
   }
 
-  // internalId интеграции: положительный — личная страница, `-<gid>` — сообщество
+  // internalId интеграции: "u<id>" или легаси "<id>" — личная страница, "-<gid>" — сообщество
   private groupId(userId: string): string | null {
     return String(userId).startsWith('-') ? String(userId).slice(1) : null;
+  }
+
+  // числовой owner_id для VK API (срезает префикс "u" личной страницы)
+  private ownerId(userId: string): string {
+    return String(userId).startsWith('u')
+      ? String(userId).slice(1)
+      : String(userId);
   }
 
   async pages(accessToken: string) {
@@ -185,7 +196,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
       ...(me
         ? [
             {
-              id: String(me.id),
+              id: `u${me.id}`,
               name: `${me.first_name} ${me.last_name} — личная страница`,
               picture: { data: { url: me.photo_200 || '' } },
             },
@@ -225,7 +236,9 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
 
     const { response } = await (
       await this.fetch(
-        `https://api.vk.com/method/users.get?user_ids=${id}&fields=photo_200,screen_name&v=5.251&access_token=${accessToken}`
+        `https://api.vk.com/method/users.get?user_ids=${this.ownerId(
+          id
+        )}&fields=photo_200,screen_name&v=5.251&access_token=${accessToken}`
       )
     ).json();
     const [user] = response || [];
@@ -261,6 +274,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     post: PostDetails
   ): Promise<{ id: string; type: string; owner: string }[]> {
     const gid = this.groupId(userId);
+    const owner = this.ownerId(userId);
     return await Promise.all(
       (post?.media || []).map(async (media) => {
         const all = await (
@@ -270,7 +284,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
                   gid ? `&group_id=${gid}` : ''
                 }`
               : `https://api.vk.com/method/photos.getWallUploadServer?access_token=${accessToken}&v=5.251${
-                  gid ? `&group_id=${gid}` : `&owner_id=${userId}`
+                  gid ? `&group_id=${gid}` : `&owner_id=${owner}`
                 }`
           )
         ).json();
@@ -302,7 +316,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
           return {
             id: all.response.video_id,
             type: 'video',
-            owner: String(all.response.owner_id ?? userId),
+            owner: String(all.response.owner_id ?? owner),
           };
         }
 
@@ -328,7 +342,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
         return {
           id,
           type: 'photo',
-          owner: String(owner_id ?? userId),
+          owner: String(owner_id ?? owner),
         };
       })
     );
@@ -344,9 +358,10 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     // Upload media for the first post
     const mediaList = await this.uploadMedia(userId, accessToken, firstPost);
 
+    const owner = this.ownerId(userId);
     const body = new FormData();
     body.append('message', firstPost.message);
-    body.append('owner_id', String(userId));
+    body.append('owner_id', owner);
     if (this.groupId(userId)) {
       body.append('from_group', '1');
     }
@@ -372,7 +387,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
       {
         id: firstPost.id,
         postId: String(response?.post_id),
-        releaseURL: `https://vk.com/wall${userId}_${response?.post_id}`,
+        releaseURL: `https://vk.com/wall${owner}_${response?.post_id}`,
         status: 'completed',
       },
     ];
@@ -391,12 +406,15 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     // Upload media for the comment
     const mediaList = await this.uploadMedia(userId, accessToken, commentPost);
 
+    const owner = this.ownerId(userId);
+    const gid = this.groupId(userId);
     const body = new FormData();
     body.append('message', commentPost.message);
     body.append('post_id', postId);
-    body.append('owner_id', String(userId));
-    if (this.groupId(userId)) {
-      body.append('from_group', '1');
+    body.append('owner_id', owner);
+    if (gid) {
+      // в wall.createComment from_group — это id сообщества, а не флаг
+      body.append('from_group', gid);
     }
 
     if (mediaList.length) {
@@ -420,7 +438,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
       {
         id: commentPost.id,
         postId: String(response?.comment_id),
-        releaseURL: `https://vk.com/feed?w=wall${userId}_${postId}`,
+        releaseURL: `https://vk.com/wall${owner}_${postId}`,
         status: 'completed',
       },
     ];
