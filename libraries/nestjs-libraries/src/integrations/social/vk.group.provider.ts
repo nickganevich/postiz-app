@@ -81,7 +81,7 @@ export class VkGroupProvider extends VkProvider {
     codeVerifier: string;
     refresh?: string;
   }): Promise<AuthTokenDetails | string> {
-    let body: { group?: string; accessToken?: string };
+    let body: { group?: string; accessToken?: string; userToken?: string };
     try {
       body = JSON.parse(Buffer.from(params.code, 'base64').toString());
     } catch (err) {
