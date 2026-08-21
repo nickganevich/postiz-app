@@ -1,4 +1,10 @@
-import { AuthTokenDetails } from '@gitroom/nestjs-libraries/integrations/social/social.integrations.interface';
+import {
+  AuthTokenDetails,
+  PostDetails,
+} from '@gitroom/nestjs-libraries/integrations/social/social.integrations.interface';
+import { BadBody } from '@gitroom/nestjs-libraries/integrations/social.abstract';
+import FormDataNew from 'form-data';
+import { hasExtension } from '@gitroom/helpers/utils/has.extension';
 import { makeId } from '@gitroom/nestjs-libraries/services/make.is';
 import dayjs from 'dayjs';
 import { VkProvider } from '@gitroom/nestjs-libraries/integrations/social/vk.provider';
@@ -119,5 +125,82 @@ export class VkGroupProvider extends VkProvider {
       picture: '',
       username: '',
     };
+  }
+
+  // Ключу сообщества недоступны все photos.get*UploadServer для стены
+  // (error 27) — единственный разрешённый загрузчик у сообществ это
+  // "загрузка для сообщений" (так работают боты). Такое фото отлично
+  // прикладывается к wall.post как photo{owner}_{id}_{access_key}.
+  // Важно: filename с расширением обязателен, иначе VK молча вернёт
+  // пустое поле photo. Видео ключом сообщества загрузить нельзя вовсе.
+  protected override async uploadMedia(
+    userId: string,
+    accessToken: string,
+    post: PostDetails
+  ): Promise<{ id: string; type: string; owner: string }[]> {
+    const media = post?.media || [];
+    if (media.some((item) => hasExtension(item.path, 'mp4'))) {
+      throw new BadBody(
+        this.identifier,
+        '{}',
+        {} as any,
+        'VK не разрешает загружать видео ключом сообщества — прикрепите фото или уберите видео'
+      );
+    }
+
+    const result: { id: string; type: string; owner: string }[] = [];
+    for (const item of media) {
+      const server = await (
+        await this.fetch(
+          `https://api.vk.com/method/photos.getMessagesUploadServer?peer_id=0&access_token=${accessToken}&v=5.251`
+        )
+      ).json();
+
+      const { data } = await this.getSsrfSafeAxios().get(item.path!, {
+        responseType: 'stream',
+      });
+
+      const fileName = item.path.split('/').at(-1) || 'photo.jpg';
+      const formData = new FormDataNew();
+      formData.append('photo', data, { filename: fileName });
+
+      const uploaded = (
+        await this.getSsrfSafeAxios().post(
+          server.response.upload_url,
+          formData,
+          { headers: { ...formData.getHeaders() } }
+        )
+      ).data;
+
+      const formSend = new FormData();
+      formSend.append('photo', uploaded.photo);
+      formSend.append('server', String(uploaded.server));
+      formSend.append('hash', uploaded.hash);
+
+      const saved = await (
+        await this.fetch(
+          `https://api.vk.com/method/photos.saveMessagesPhoto?access_token=${accessToken}&v=5.251`,
+          { method: 'POST', body: formSend }
+        )
+      ).json();
+
+      const [photo] = saved?.response || [];
+      if (!photo?.id) {
+        throw new BadBody(
+          this.identifier,
+          JSON.stringify(saved),
+          {} as any,
+          'VK не принял фото — попробуйте другое изображение'
+        );
+      }
+
+      result.push({
+        id: photo.access_key ? `${photo.id}_${photo.access_key}` : String(photo.id),
+        type: 'photo',
+        owner: String(photo.owner_id),
+      });
+    }
+
+    return result;
   }
 }

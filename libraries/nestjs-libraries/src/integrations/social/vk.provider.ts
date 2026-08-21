@@ -268,7 +268,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     };
   }
 
-  private async uploadMedia(
+  protected async uploadMedia(
     userId: string,
     accessToken: string,
     post: PostDetails
