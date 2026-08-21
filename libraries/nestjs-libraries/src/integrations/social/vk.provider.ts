@@ -7,7 +7,10 @@ import {
 } from '@gitroom/nestjs-libraries/integrations/social/social.integrations.interface';
 import { makeId } from '@gitroom/nestjs-libraries/services/make.is';
 import dayjs from 'dayjs';
-import { SocialAbstract } from '@gitroom/nestjs-libraries/integrations/social.abstract';
+import {
+  BadBody,
+  SocialAbstract,
+} from '@gitroom/nestjs-libraries/integrations/social.abstract';
 import { createHash, randomBytes } from 'crypto';
 import FormDataNew from 'form-data';
 import mime from 'mime-types';
@@ -373,7 +376,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
       );
     }
 
-    const { response } = await (
+    const { response, error } = await (
       await this.fetch(
         `https://api.vk.com/method/wall.post?v=5.251&access_token=${accessToken}&client_id=${process.env.VK_ID}`,
         {
@@ -383,11 +386,22 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
       )
     ).json();
 
+    // без проверки error пост с ошибкой VK помечался бы опубликованным
+    // с releaseURL вида wall..._undefined
+    if (error || !response?.post_id) {
+      throw new BadBody(
+        this.identifier,
+        JSON.stringify(error || {}),
+        {} as any,
+        `VK не опубликовал пост: ${error?.error_msg || 'нет post_id в ответе'}`
+      );
+    }
+
     return [
       {
         id: firstPost.id,
-        postId: String(response?.post_id),
-        releaseURL: `https://vk.com/wall${owner}_${response?.post_id}`,
+        postId: String(response.post_id),
+        releaseURL: `https://vk.com/wall${owner}_${response.post_id}`,
         status: 'completed',
       },
     ];
@@ -424,7 +438,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
       );
     }
 
-    const { response } = await (
+    const { response, error } = await (
       await this.fetch(
         `https://api.vk.com/method/wall.createComment?v=5.251&access_token=${accessToken}&client_id=${process.env.VK_ID}`,
         {
@@ -434,10 +448,19 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
       )
     ).json();
 
+    if (error || !response?.comment_id) {
+      throw new BadBody(
+        this.identifier,
+        JSON.stringify(error || {}),
+        {} as any,
+        `VK не создал комментарий: ${error?.error_msg || 'нет comment_id в ответе'}`
+      );
+    }
+
     return [
       {
         id: commentPost.id,
-        postId: String(response?.comment_id),
+        postId: String(response.comment_id),
         releaseURL: `https://vk.com/wall${owner}_${postId}`,
         status: 'completed',
       },

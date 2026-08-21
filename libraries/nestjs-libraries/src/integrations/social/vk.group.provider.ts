@@ -150,54 +150,78 @@ export class VkGroupProvider extends VkProvider {
 
     const result: { id: string; type: string; owner: string }[] = [];
     for (const item of media) {
-      const server = await (
-        await this.fetch(
-          `https://api.vk.com/method/photos.getMessagesUploadServer?peer_id=0&access_token=${accessToken}&v=5.251`
-        )
-      ).json();
-
-      const { data } = await this.getSsrfSafeAxios().get(item.path!, {
-        responseType: 'stream',
-      });
-
+      // Файл качаем целиком в буфер: при потоковой (chunked) передаче
+      // pu.vk.com периодически отвечает пустым полем photo. С буфером
+      // form-data проставляет Content-Length, и загрузка стабильна.
+      const { data: fileBuffer } = await this.getSsrfSafeAxios().get(
+        item.path!,
+        { responseType: 'arraybuffer' }
+      );
       const fileName = item.path.split('/').at(-1) || 'photo.jpg';
-      const formData = new FormDataNew();
-      formData.append('photo', data, { filename: fileName });
 
-      const uploaded = (
-        await this.getSsrfSafeAxios().post(
-          server.response.upload_url,
-          formData,
-          { headers: { ...formData.getHeaders() } }
-        )
-      ).data;
+      let saved: any = null;
+      let lastAnswer = '';
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const server = await (
+          await this.fetch(
+            `https://api.vk.com/method/photos.getMessagesUploadServer?peer_id=0&access_token=${accessToken}&v=5.251`
+          )
+        ).json();
 
-      const formSend = new FormData();
-      formSend.append('photo', uploaded.photo);
-      formSend.append('server', String(uploaded.server));
-      formSend.append('hash', uploaded.hash);
+        const formData = new FormDataNew();
+        formData.append('photo', Buffer.from(fileBuffer), {
+          filename: fileName,
+          knownLength: (fileBuffer as Buffer).length,
+        });
 
-      const saved = await (
-        await this.fetch(
-          `https://api.vk.com/method/photos.saveMessagesPhoto?access_token=${accessToken}&v=5.251`,
-          { method: 'POST', body: formSend }
-        )
-      ).json();
+        const uploaded = (
+          await this.getSsrfSafeAxios().post(
+            server.response.upload_url,
+            formData,
+            { headers: { ...formData.getHeaders() } }
+          )
+        ).data;
 
-      const [photo] = saved?.response || [];
-      if (!photo?.id) {
+        if (!uploaded?.photo || uploaded.photo === '[]') {
+          // upload_url одноразовый — на следующий круг берём свежий
+          lastAnswer = JSON.stringify(uploaded || {});
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          continue;
+        }
+
+        const formSend = new FormData();
+        formSend.append('photo', uploaded.photo);
+        formSend.append('server', String(uploaded.server));
+        formSend.append('hash', uploaded.hash);
+
+        const answer = await (
+          await this.fetch(
+            `https://api.vk.com/method/photos.saveMessagesPhoto?access_token=${accessToken}&v=5.251`,
+            { method: 'POST', body: formSend }
+          )
+        ).json();
+
+        if (answer?.response?.[0]?.id) {
+          saved = answer.response[0];
+          break;
+        }
+        lastAnswer = JSON.stringify(answer || {});
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+
+      if (!saved) {
         throw new BadBody(
           this.identifier,
-          JSON.stringify(saved),
+          lastAnswer,
           {} as any,
-          'VK не принял фото — попробуйте другое изображение'
+          `VK не принял фото ${fileName} после трёх попыток — попробуйте ещё раз или замените изображение`
         );
       }
 
       result.push({
-        id: photo.access_key ? `${photo.id}_${photo.access_key}` : String(photo.id),
+        id: saved.access_key ? `${saved.id}_${saved.access_key}` : String(saved.id),
         type: 'photo',
-        owner: String(photo.owner_id),
+        owner: String(saved.owner_id),
       });
     }
 

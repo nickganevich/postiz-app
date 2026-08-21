@@ -403,9 +403,13 @@ export class OkruProvider extends SocialAbstract implements SocialProvider {
   ): Promise<PostResponse[]> {
     const [firstPost] = postDetails;
 
-    const text = striptags(firstPost.message || '').slice(0, OKRU_MAX_LENGTH);
+    const text = striptags(firstPost.message || '')
+      .trim()
+      .slice(0, OKRU_MAX_LENGTH);
 
-    const media: OkruMediaBlock[] = [{ type: 'text', text }];
+    // ОК отклоняет пустой текстовый блок (PARAM: 'text' should be
+    // specified) — блок добавляется только когда текст реально есть.
+    const media: OkruMediaBlock[] = text ? [{ type: 'text', text }] : [];
 
     const photoTokens: string[] = [];
     for (const item of firstPost.media || []) {
@@ -425,6 +429,15 @@ export class OkruProvider extends SocialAbstract implements SocialProvider {
         type: 'photo',
         list: photoTokens.map((token) => ({ id: token })),
       });
+    }
+
+    if (!media.length) {
+      throw new BadBody(
+        this.identifier,
+        '{}',
+        {} as any,
+        'Пост для Одноклассников пуст — добавьте текст, фото или видео'
+      );
     }
 
     const attachment = JSON.stringify({
