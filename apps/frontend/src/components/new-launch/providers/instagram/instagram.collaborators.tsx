@@ -17,11 +17,15 @@ import { InstagramPreview } from '@gitroom/frontend/components/new-launch/provid
 const postType = [
   {
     value: 'post',
-    label: 'Post / Reel',
+    label: 'Пост (фото или карусель)',
+  },
+  {
+    value: 'reel',
+    label: 'Рилс (одно видео)',
   },
   {
     value: 'story',
-    label: 'Story',
+    label: 'Сторис',
   },
 ];
 
@@ -70,20 +74,17 @@ const InstagramCollaborators: FC<{
         />
       )}
 
-      {postCurrentType === 'post' && (
+      {postCurrentType === 'reel' && (
         <div className="mt-[18px]">
           <InstagramAudioSelector
-            label={t(
-              'instagram_audio_label',
-              'Audio (Reels only - single video)'
-            )}
+            label={t('instagram_audio_label', 'Аудио для рилса')}
             disabled={!supportsAudio}
             {...register('audio')}
           />
         </div>
       )}
 
-      {postCurrentType === 'post' && (
+      {postCurrentType === 'reel' && (
         <div className="mt-[18px] flex flex-col gap-[18px]">
           <Checkbox
             {...register('is_trial_reel', {

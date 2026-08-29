@@ -57,6 +57,17 @@ export class InstagramProvider
     if (firstPost.length > 10) {
       return 'Instagram carousel only supports up to 10 media attachments';
     }
+    if (settings?.post_type === 'reel') {
+      if ((firstPost?.length ?? 0) > 1) {
+        return 'Рилс — это ровно одно видео';
+      }
+      const hasVideo = firstPost?.some(
+        (f) => (f?.path?.indexOf?.('mp4') ?? -1) > -1
+      );
+      if (!hasVideo) {
+        return 'Для рилса нужно видео — выберите тип «Пост» для фото';
+      }
+    }
     if (this.assetBoolean(settings?.is_trial_reel)) {
       if ((firstPost?.length ?? 0) > 1) {
         return 'Trial Reels can only have one video';
@@ -655,7 +666,28 @@ export class InstagramProvider
     const [accessToken] = token.split('___');
     const [firstPost] = postDetails;
     const isStory = firstPost.settings.post_type === 'story';
+    // 'reel' — явный выбор пользователя. Одиночное видео в обычном посте
+    // Instagram всё равно показывает как Reels, поэтому оно тоже идёт в REELS.
+    const isReel =
+      firstPost.settings.post_type === 'reel' ||
+      (!isStory &&
+        firstPost?.media?.length === 1 &&
+        hasExtension(firstPost.media[0].path, 'mp4'));
     const isTrialReel = this.assetBoolean(firstPost.settings.is_trial_reel);
+
+    if (firstPost.settings.post_type === 'reel') {
+      const videos = (firstPost.media || []).filter((m) =>
+        hasExtension(m.path, 'mp4')
+      );
+      if (videos.length !== 1 || firstPost.media?.length !== 1) {
+        throw new BadBody(
+          this.identifier,
+          '{}',
+          {} as any,
+          'Рилс — это ровно одно видео. Уберите лишние вложения или выберите тип «Пост».'
+        );
+      }
+    }
     const medias = await Promise.all(
       firstPost?.media?.map(async (m) => {
         const caption =
@@ -667,14 +699,12 @@ export class InstagramProvider
             ? `&is_carousel_item=true`
             : ``;
         const mediaType = hasExtension(m.path, 'mp4')
-          ? firstPost?.media?.length === 1
-            ? isStory
-              ? `video_url=${m.path}&media_type=STORIES`
-              : `video_url=${m.path}&media_type=REELS&thumb_offset=${
-                  m?.thumbnailTimestamp || 0
-                }`
-            : isStory
+          ? isStory
             ? `video_url=${m.path}&media_type=STORIES`
+            : isReel
+            ? `video_url=${m.path}&media_type=REELS&thumb_offset=${
+                m?.thumbnailTimestamp || 0
+              }`
             : `video_url=${m.path}&media_type=VIDEO&thumb_offset=${
                 m?.thumbnailTimestamp || 0
               }`

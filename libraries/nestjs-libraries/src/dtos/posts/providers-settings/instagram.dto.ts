@@ -49,9 +49,11 @@ export class InstagramAudio {
   video_volume?: number;
 }
 export class InstagramDto {
-  @IsIn(['post', 'story'])
+  // reel — отдельный тип: одно видео уходит как REELS,
+  // post — фото/карусель/видео в ленту, story — сторис
+  @IsIn(['post', 'reel', 'story'])
   @IsDefined()
-  post_type: 'post' | 'story';
+  post_type: 'post' | 'reel' | 'story';
 
   @IsOptional()
   is_trial_reel?: boolean;
