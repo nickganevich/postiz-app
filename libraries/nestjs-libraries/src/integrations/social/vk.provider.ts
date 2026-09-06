@@ -9,6 +9,7 @@ import { makeId } from '@gitroom/nestjs-libraries/services/make.is';
 import dayjs from 'dayjs';
 import {
   BadBody,
+  RefreshToken,
   SocialAbstract,
 } from '@gitroom/nestjs-libraries/integrations/social.abstract';
 import { createHash, randomBytes } from 'crypto';
@@ -350,15 +351,20 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     return hasExtension(path, 'mp4') || hasExtension(path, 'mov');
   }
 
+  // Токен VK ID живёт около часа. Ошибки авторизации отдаём как refresh_token,
+  // иначе воркфлоу считает пост непоправимо сломанным и не пытается обновить
+  // токен, хотя обновление — ровно то, что нужно (коды: 5 — токен протух или
+  // отозван, 28 — приложение переавторизовано).
   private vkError(what: string, error?: any): never {
-    throw new BadBody(
-      this.identifier,
-      JSON.stringify(error || {}),
-      {} as any,
-      `VK отклонил ${what}: ${error?.error_msg || 'пустой ответ'}${
-        error?.error_code ? ` (код ${error.error_code})` : ''
-      }`
-    );
+    const message = `VK отклонил ${what}: ${
+      error?.error_msg || 'пустой ответ'
+    }${error?.error_code ? ` (код ${error.error_code})` : ''}`;
+    const json = JSON.stringify(error || {});
+    const needsRefresh = error?.error_code === 5 || error?.error_code === 28;
+
+    throw needsRefresh
+      ? new RefreshToken(this.identifier, json, {} as any, message)
+      : new BadBody(this.identifier, json, {} as any, message);
   }
 
   // Файл скачиваем целиком: загрузчик VK периодически обрывает chunked-стрим
@@ -602,12 +608,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     // без проверки error пост с ошибкой VK помечался бы опубликованным
     // с releaseURL вида wall..._undefined
     if (error || !response?.post_id) {
-      throw new BadBody(
-        this.identifier,
-        JSON.stringify(error || {}),
-        {} as any,
-        `VK не опубликовал пост: ${error?.error_msg || 'нет post_id в ответе'}`
-      );
+      this.vkError('публикацию записи', error || { error_msg: 'нет post_id в ответе' });
     }
 
     return [
@@ -695,12 +696,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     ).json();
 
     if (error || !response?.comment_id) {
-      throw new BadBody(
-        this.identifier,
-        JSON.stringify(error || {}),
-        {} as any,
-        `VK не создал комментарий: ${error?.error_msg || 'нет comment_id в ответе'}`
-      );
+      this.vkError('комментарий', error || { error_msg: 'нет comment_id в ответе' });
     }
 
     return [
