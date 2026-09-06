@@ -16,6 +16,13 @@ import FormDataNew from 'form-data';
 import mime from 'mime-types';
 import { Integration } from '@prisma/client';
 import { hasExtension } from '@gitroom/helpers/utils/has.extension';
+import { VkDto } from '@gitroom/nestjs-libraries/dtos/posts/providers-settings/vk.dto';
+
+// Заголовок поля в настройках канала, куда кладётся ключ доступа сообщества
+// (Управление сообществом -> Работа с API -> Ключи доступа). Пользовательским
+// токеном VK ID публиковать в сообщество нельзя, поэтому для сообществ этот
+// ключ обязателен; для личной страницы поле просто остаётся пустым.
+export const VK_COMMUNITY_KEY_TITLE = 'Ключ доступа сообщества';
 
 export class VkProvider extends SocialAbstract implements SocialProvider {
   override maxConcurrentJob = 2; // VK has moderate API limits
@@ -82,6 +89,16 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     };
   }
 
+  // Путь колбэка совпадает с identifier провайдера, поэтому у канала-сообщества
+  // он свой; оба адреса должны быть прописаны в приложении на id.vk.com.
+  protected redirectUri() {
+    const frontend =
+      process?.env.FRONTEND_URL?.indexOf('https') == -1
+        ? `https://redirectmeto.com/${process?.env.FRONTEND_URL}`
+        : `${process?.env.FRONTEND_URL}`;
+    return `${frontend}/integrations/social/${this.identifier}`;
+  }
+
   async generateAuthUrl() {
     const state = makeId(32);
     const codeVerifier = randomBytes(64).toString('base64url');
@@ -100,13 +117,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
         `&client_id=${process.env.VK_ID}` +
         `&code_challenge_method=S256` +
         `&code_challenge=${challenge}` +
-        `&redirect_uri=${encodeURIComponent(
-          `${
-            process?.env.FRONTEND_URL?.indexOf('https') == -1
-              ? `https://redirectmeto.com/${process?.env.FRONTEND_URL}`
-              : `${process?.env.FRONTEND_URL}`
-          }/integrations/social/vk`
-        )}` +
+        `&redirect_uri=${encodeURIComponent(this.redirectUri())}` +
         `&state=${state}` +
         `&scope=${encodeURIComponent(this.scopes.join(' '))}`,
       codeVerifier,
@@ -127,14 +138,7 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     formData.append('code_verifier', params.codeVerifier);
     formData.append('device_id', device_id);
     formData.append('code', code);
-    formData.append(
-      'redirect_uri',
-      `${
-        process?.env.FRONTEND_URL?.indexOf('https') == -1
-          ? `https://redirectmeto.com/${process?.env.FRONTEND_URL}`
-          : `${process?.env.FRONTEND_URL}`
-      }/integrations/social/vk`
-    );
+    formData.append('redirect_uri', this.redirectUri());
 
     const { access_token, scope, refresh_token, expires_in } = await (
       await this.fetch('https://id.vk.com/oauth2/auth', {
@@ -166,16 +170,29 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
       expiresIn: dayjs().add(expires_in, 'seconds').unix() - dayjs().unix(),
       picture: avatar || '',
       username: first_name.toLowerCase(),
+      additionalSettings: this.communityKeySetting(),
     };
   }
 
+  protected communityKeySetting() {
+    return [
+      {
+        title: VK_COMMUNITY_KEY_TITLE,
+        description:
+          'Нужен только для сообществ: Управление сообществом → Работа с API → Ключи доступа (права «Стена»). Публиковать в сообщество личным токеном VK не даёт, а грузить фото и видео умеет только личный токен — поэтому нужны оба.',
+        type: 'text' as const,
+        value: '',
+      },
+    ];
+  }
+
   // internalId интеграции: "u<id>" или легаси "<id>" — личная страница, "-<gid>" — сообщество
-  private groupId(userId: string): string | null {
+  protected groupId(userId: string): string | null {
     return String(userId).startsWith('-') ? String(userId).slice(1) : null;
   }
 
   // числовой owner_id для VK API (срезает префикс "u" личной страницы)
-  private ownerId(userId: string): string {
+  protected ownerId(userId: string): string {
     return String(userId).startsWith('u')
       ? String(userId).slice(1)
       : String(userId);
@@ -268,7 +285,213 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
       accessToken: information.access_token,
       picture: information.picture,
       username: information.username,
+      // чтобы поле ключа сообщества появилось в настройках и у каналов,
+      // переподключённых поверх старого способа авторизации
+      additionalSettings: this.communityKeySetting(),
     };
+  }
+
+  // Медиа на стену VK грузится только пользовательским токеном: у ключей
+  // сообществ photos.getWallUploadServer / video.save закрыты (ошибка 27,
+  // см. схему VK API — access_token_type: ["user"]). Основной токен канала
+  // как раз пользовательский, поэтому по умолчанию грузим им.
+  protected mediaToken(
+    accessToken: string,
+    integration?: Integration
+  ): string | null {
+    return accessToken;
+  }
+
+  // Токен для самой публикации. Для сообщества, подключённого через VK ID,
+  // wall.post пользовательским токеном возвращает 1051 ("method is
+  // unavailable with current profile type") — нужен ключ доступа сообщества,
+  // который хранится в настройках канала.
+  protected wallToken(
+    accessToken: string,
+    userId: string,
+    integration?: Integration
+  ): string {
+    if (!this.groupId(userId)) {
+      return accessToken;
+    }
+    return this.communityKey(integration) || accessToken;
+  }
+
+  // Ключ доступа сообщества из настроек канала (шестерёнка у канала).
+  protected communityKey(integration?: Integration): string | null {
+    try {
+      const settings = JSON.parse(integration?.additionalSettings || '[]');
+      const found = settings.find(
+        (s: { title: string }) => s.title === VK_COMMUNITY_KEY_TITLE
+      );
+      return String(found?.value || '').trim() || null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  protected isVideo(path: string) {
+    return hasExtension(path, 'mp4') || hasExtension(path, 'mov');
+  }
+
+  private vkError(what: string, error?: any): never {
+    throw new BadBody(
+      this.identifier,
+      JSON.stringify(error || {}),
+      {} as any,
+      `VK отклонил ${what}: ${error?.error_msg || 'пустой ответ'}${
+        error?.error_code ? ` (код ${error.error_code})` : ''
+      }`
+    );
+  }
+
+  // Файл скачиваем целиком: загрузчик VK периодически обрывает chunked-стрим
+  // и отвечает пустотой, а с известной длиной (knownLength) — нет.
+  private async download(path: string): Promise<Buffer> {
+    const { data } = await this.getSsrfSafeAxios().get(path, {
+      responseType: 'arraybuffer',
+    });
+    return Buffer.from(data);
+  }
+
+  private async uploadToVk(uploadUrl: string, field: string, file: Buffer, name: string) {
+    const formData = new FormDataNew();
+    formData.append(field, file, {
+      filename: name,
+      contentType: mime.lookup(name) || undefined,
+      knownLength: file.length,
+    });
+
+    return (
+      await this.getSsrfSafeAxios().post(uploadUrl, formData, {
+        headers: { ...formData.getHeaders() },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+      })
+    ).data;
+  }
+
+  // getWallUploadServer -> upload -> saveWallPhoto. Фото сохраняется во
+  // владение сообщества (group_id), поэтому потом без проблем крепится
+  // к записи, опубликованной ключом сообщества.
+  private async uploadPhoto(
+    gid: string | null,
+    owner: string,
+    accessToken: string,
+    media: { path: string }
+  ): Promise<{ id: string; type: string; owner: string }> {
+    const file = await this.download(media.path);
+    const fileName = media.path.split('/').at(-1) || 'photo.jpg';
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { response, error } = await (
+        await this.fetch(
+          `https://api.vk.com/method/photos.getWallUploadServer?v=5.251&access_token=${accessToken}${
+            gid ? `&group_id=${gid}` : `&owner_id=${owner}`
+          }`
+        )
+      ).json();
+
+      if (error || !response?.upload_url) {
+        this.vkError('photos.getWallUploadServer', error);
+      }
+
+      const uploaded = await this.uploadToVk(
+        response.upload_url,
+        'photo',
+        file,
+        fileName
+      );
+
+      // пустой ответ загрузчика — не ошибка запроса, а известная флакота VK
+      if (uploaded?.photo && uploaded.photo !== '[]') {
+        const body = new FormData();
+        body.append('photo', uploaded.photo);
+        body.append('server', String(uploaded.server));
+        body.append('hash', uploaded.hash);
+        if (gid) {
+          body.append('group_id', gid);
+        }
+
+        const saved = await (
+          await this.fetch(
+            `https://api.vk.com/method/photos.saveWallPhoto?v=5.251&access_token=${accessToken}`,
+            { method: 'POST', body }
+          )
+        ).json();
+
+        if (saved?.error) {
+          this.vkError('photos.saveWallPhoto', saved.error);
+        }
+
+        const [photo] = saved?.response || [];
+        if (photo?.id) {
+          return {
+            id: String(photo.id),
+            type: 'photo',
+            owner: String(photo.owner_id ?? owner),
+          };
+        }
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+
+    this.vkError('загрузку фото', {
+      error_msg: `${fileName}: загрузчик трижды ответил пустотой`,
+    });
+  }
+
+  // video.save -> upload. Вертикальное короткое видео VK сам показывает
+  // в Клипах: отдельного метода для клипов в API нет.
+  private async uploadVideo(
+    gid: string | null,
+    owner: string,
+    accessToken: string,
+    media: { path: string },
+    meta: { name: string; description: string }
+  ): Promise<{ id: string; type: string; owner: string }> {
+    const { response, error } = await (
+      await this.fetch(
+        `https://api.vk.com/method/video.save?v=5.251&access_token=${accessToken}` +
+          `&name=${encodeURIComponent(meta.name)}` +
+          `&description=${encodeURIComponent(meta.description)}` +
+          (gid ? `&group_id=${gid}` : '')
+      )
+    ).json();
+
+    if (error || !response?.upload_url) {
+      this.vkError('video.save', error);
+    }
+
+    const fileName = media.path.split('/').at(-1) || 'video.mp4';
+    const uploaded = await this.uploadToVk(
+      response.upload_url,
+      'video_file',
+      await this.download(media.path),
+      fileName
+    );
+
+    const videoId = uploaded?.video_id || response.video_id;
+    if (!videoId) {
+      this.vkError('загрузку видео', {
+        error_msg: `${fileName}: VK не вернул video_id`,
+      });
+    }
+
+    return {
+      id: String(videoId),
+      type: 'video',
+      owner: String(uploaded?.owner_id ?? response.owner_id ?? owner),
+    };
+  }
+
+  // У видео в VK обязателен заголовок — берём первую непустую строку текста
+  private videoTitle(message?: string) {
+    const first = String(message || '')
+      .split('\n')
+      .find((line) => line.trim());
+    return (first || 'Видео').trim().slice(0, 128);
   }
 
   protected async uploadMedia(
@@ -278,97 +501,67 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
   ): Promise<{ id: string; type: string; owner: string }[]> {
     const gid = this.groupId(userId);
     const owner = this.ownerId(userId);
-    return await Promise.all(
-      (post?.media || []).map(async (media) => {
-        const all = await (
-          await this.fetch(
-            hasExtension(media.path, 'mp4')
-              ? `https://api.vk.com/method/video.save?access_token=${accessToken}&v=5.251${
-                  gid ? `&group_id=${gid}` : ''
-                }`
-              : `https://api.vk.com/method/photos.getWallUploadServer?access_token=${accessToken}&v=5.251${
-                  gid ? `&group_id=${gid}` : `&owner_id=${owner}`
-                }`
-          )
-        ).json();
+    const result: { id: string; type: string; owner: string }[] = [];
 
-        const { data } = await this.getSsrfSafeAxios().get(media.path!, {
-          responseType: 'stream',
-        });
+    // последовательно, а не Promise.all: у VK лимит 3 запроса в секунду,
+    // и параллельная заливка карусели упирается в него
+    for (const media of post?.media || []) {
+      result.push(
+        this.isVideo(media.path)
+          ? await this.uploadVideo(gid, owner, accessToken, media, {
+              name: this.videoTitle(post.message),
+              description: post.message || '',
+            })
+          : await this.uploadPhoto(gid, owner, accessToken, media)
+      );
+    }
 
-        const slash = media.path.split('/').at(-1);
-
-        const formData = new FormDataNew();
-        formData.append('photo', data, {
-          filename: slash,
-          contentType: mime.lookup(slash!) || '',
-        });
-        const value = (
-          await this.getSsrfSafeAxios().post(
-            all.response.upload_url,
-            formData,
-            {
-              headers: {
-                ...formData.getHeaders(),
-              },
-            }
-          )
-        ).data;
-
-        if (hasExtension(media.path, 'mp4')) {
-          return {
-            id: all.response.video_id,
-            type: 'video',
-            owner: String(all.response.owner_id ?? owner),
-          };
-        }
-
-        const formSend = new FormData();
-        formSend.append('photo', value.photo);
-        formSend.append('server', value.server);
-        formSend.append('hash', value.hash);
-
-        const { id, owner_id } = (
-          await (
-            await fetch(
-              `https://api.vk.com/method/photos.saveWallPhoto?access_token=${accessToken}&v=5.251${
-                gid ? `&group_id=${gid}` : ''
-              }`,
-              {
-                method: 'POST',
-                body: formSend,
-              }
-            )
-          ).json()
-        ).response[0];
-
-        return {
-          id,
-          type: 'photo',
-          owner: String(owner_id ?? owner),
-        };
-      })
-    );
+    return result;
   }
 
   async post(
     userId: string,
     accessToken: string,
-    postDetails: PostDetails[]
+    postDetails: PostDetails<VkDto>[],
+    integration?: Integration
   ): Promise<PostResponse[]> {
     const [firstPost] = postDetails;
-
-    // Upload media for the first post
-    const mediaList = await this.uploadMedia(userId, accessToken, firstPost);
-
+    const settings = firstPost?.settings || ({} as VkDto);
+    const gid = this.groupId(userId);
     const owner = this.ownerId(userId);
-    const body = new FormData();
-    body.append('message', firstPost.message);
-    body.append('owner_id', owner);
-    if (this.groupId(userId)) {
-      body.append('from_group', '1');
+    const media = firstPost?.media || [];
+
+    if (settings.post_type === 'clip') {
+      if (media.length !== 1 || !this.isVideo(media[0].path)) {
+        throw new BadBody(
+          this.identifier,
+          '{}',
+          {} as any,
+          'Клип — это ровно одно вертикальное видео (mp4). Уберите лишние файлы или выберите тип «Запись на стене».'
+        );
+      }
     }
 
+    const mediaList = media.length
+      ? await this.uploadMedia(
+          userId,
+          this.requireMediaToken(accessToken, integration),
+          firstPost
+        )
+      : [];
+
+    const body = new FormData();
+    body.append('message', firstPost.message || '');
+    body.append('owner_id', owner);
+    if (gid) {
+      body.append('from_group', '1');
+    }
+    if (settings.close_comments) {
+      body.append('close_comments', '1');
+    }
+    if (gid && settings.signed) {
+      body.append('signed', '1');
+    }
     if (mediaList.length) {
       body.append(
         'attachments',
@@ -378,7 +571,11 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
 
     const { response, error } = await (
       await this.fetch(
-        `https://api.vk.com/method/wall.post?v=5.251&access_token=${accessToken}&client_id=${process.env.VK_ID}`,
+        `https://api.vk.com/method/wall.post?v=5.251&access_token=${this.wallToken(
+          accessToken,
+          userId,
+          integration
+        )}&client_id=${process.env.VK_ID}`,
         {
           method: 'POST',
           body,
@@ -407,6 +604,29 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     ];
   }
 
+  // Отдельно от mediaToken, чтобы причина отказа доезжала до пользователя
+  // текстом, а не падением на undefined внутри загрузчика.
+  protected requireMediaToken(
+    accessToken: string,
+    integration?: Integration
+  ): string {
+    const token = this.mediaToken(accessToken, integration);
+    if (!token) {
+      throw new BadBody(
+        this.identifier,
+        '{}',
+        {} as any,
+        `Для медиа нужен пользовательский токен: ключам сообществ VK загрузка фото и видео запрещена. ${this.mediaTokenHint()}`
+      );
+    }
+    return token;
+  }
+
+  protected mediaTokenHint(): string {
+    return 'Переподключите канал через VK ID.';
+  }
+
+
   async comment(
     userId: string,
     postId: string,
@@ -418,7 +638,13 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     const [commentPost] = postDetails;
 
     // Upload media for the comment
-    const mediaList = await this.uploadMedia(userId, accessToken, commentPost);
+    const mediaList = commentPost?.media?.length
+      ? await this.uploadMedia(
+          userId,
+          this.requireMediaToken(accessToken, integration),
+          commentPost
+        )
+      : [];
 
     const owner = this.ownerId(userId);
     const gid = this.groupId(userId);
@@ -440,7 +666,11 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
 
     const { response, error } = await (
       await this.fetch(
-        `https://api.vk.com/method/wall.createComment?v=5.251&access_token=${accessToken}&client_id=${process.env.VK_ID}`,
+        `https://api.vk.com/method/wall.createComment?v=5.251&access_token=${this.wallToken(
+          accessToken,
+          userId,
+          integration
+        )}&client_id=${process.env.VK_ID}`,
         {
           method: 'POST',
           body,

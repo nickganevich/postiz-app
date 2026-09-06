@@ -25,6 +25,7 @@ import { SkoolDto } from '@gitroom/nestjs-libraries/dtos/posts/providers-setting
 import { WhopDto } from '@gitroom/nestjs-libraries/dtos/posts/providers-settings/whop.dto';
 import { MeweDto } from '@gitroom/nestjs-libraries/dtos/posts/providers-settings/mewe.dto';
 import { TumblrDto } from '@gitroom/nestjs-libraries/dtos/posts/providers-settings/tumblr.dto';
+import { VkDto } from '@gitroom/nestjs-libraries/dtos/posts/providers-settings/vk.dto';
 
 export type ProviderExtension<T extends string, M> = { __type: T } & M;
 export type AllProvidersSettings =
@@ -58,8 +59,8 @@ export type AllProvidersSettings =
   | ProviderExtension<'telegram', None>
   | ProviderExtension<'nostr', None>
   | ProviderExtension<'moltbook', MoltbookDto>
-  | ProviderExtension<'vk', None>
-  | ProviderExtension<'vk-group', None>
+  | ProviderExtension<'vk', VkDto>
+  | ProviderExtension<'vk-group', VkDto>
   | ProviderExtension<'okru', None>
   | ProviderExtension<'skool', SkoolDto>
   | ProviderExtension<'mewe', MeweDto>
@@ -99,8 +100,8 @@ export const allProviders = (setEmpty?: any) => {
     { value: setEmpty, name: 'bluesky' },
     { value: setEmpty, name: 'telegram' },
     { value: setEmpty, name: 'nostr' },
-    { value: setEmpty, name: 'vk' },
-    { value: setEmpty, name: 'vk-group' },
+    { value: VkDto, name: 'vk' },
+    { value: VkDto, name: 'vk-group' },
     { value: setEmpty, name: 'okru' },
     { value: MoltbookDto, name: 'moltbook' },
     { value: SkoolDto, name: 'skool' },

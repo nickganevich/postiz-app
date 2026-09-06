@@ -5,6 +5,7 @@ import { Integration } from '@prisma/client';
 import { useFetch } from '@gitroom/helpers/utils/custom.fetch';
 import { Button } from '@gitroom/react/form/button';
 import { Slider } from '@gitroom/react/form/slider';
+import { Input } from '@gitroom/react/form/input';
 import { useT } from '@gitroom/react/translation/get.transation.service.client';
 
 export const Element: FC<{
@@ -13,18 +14,34 @@ export const Element: FC<{
 }> = (props) => {
   const { setting, onChange } = props;
   const [value, setValue] = useState(setting.value);
+  // тип объявляет сам провайдер (AuthTokenDetails.additionalSettings):
+  // checkbox — переключатель, text/textarea — поле ввода
+  const isText = setting.type === 'text' || setting.type === 'textarea';
   return (
     <div className="flex flex-col gap-[10px]">
       <div>{setting.title}</div>
       <div className="text-[14px]">{setting.description}</div>
-      <Slider
-        value={value === true ? 'on' : 'off'}
-        onChange={() => {
-          setValue(!value);
-          onChange(!value);
-        }}
-        fill={true}
-      />
+      {isText ? (
+        <Input
+          name={setting.title}
+          label=""
+          disableForm={true}
+          value={value || ''}
+          onChange={(e) => {
+            setValue(e.target.value);
+            onChange(e.target.value);
+          }}
+        />
+      ) : (
+        <Slider
+          value={value === true ? 'on' : 'off'}
+          onChange={() => {
+            setValue(!value);
+            onChange(!value);
+          }}
+          fill={true}
+        />
+      )}
     </div>
   );
 };
