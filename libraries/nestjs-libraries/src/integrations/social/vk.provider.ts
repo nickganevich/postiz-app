@@ -16,6 +16,7 @@ import FormDataNew from 'form-data';
 import mime from 'mime-types';
 import { Integration } from '@prisma/client';
 import { hasExtension } from '@gitroom/helpers/utils/has.extension';
+import { AuthService } from '@gitroom/helpers/auth/auth.service';
 import { VkDto } from '@gitroom/nestjs-libraries/dtos/posts/providers-settings/vk.dto';
 
 // Заголовок поля в настройках канала, куда кладётся ключ доступа сообщества
@@ -42,8 +43,9 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
   ];
 
   editor = 'normal' as const;
+  // wall.post принимает длинные тексты — лонгриды в ВК пишутся обычным постом
   maxLength() {
-    return 2048;
+    return 16000;
   }
 
   async refreshToken(refresh: string): Promise<AuthTokenDetails> {
@@ -317,14 +319,28 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     return this.communityKey(integration) || accessToken;
   }
 
-  // Ключ доступа сообщества из настроек канала (шестерёнка у канала).
+  // Ключ доступа сообщества: сначала настройки канала (шестерёнка у канала),
+  // затем — форма подключения каналов, заведённых до перехода на VK ID:
+  // там этот же ключ лежал как accessToken.
   protected communityKey(integration?: Integration): string | null {
     try {
       const settings = JSON.parse(integration?.additionalSettings || '[]');
       const found = settings.find(
         (s: { title: string }) => s.title === VK_COMMUNITY_KEY_TITLE
       );
-      return String(found?.value || '').trim() || null;
+      const value = String(found?.value || '').trim();
+      if (value) {
+        return value;
+      }
+    } catch (err) {
+      // настройки могут быть пустыми — не повод падать, пробуем старую форму
+    }
+
+    try {
+      const legacy = JSON.parse(
+        AuthService.fixedDecryption(integration!.customInstanceDetails!)
+      );
+      return String(legacy.accessToken || '').trim() || null;
     } catch (err) {
       return null;
     }

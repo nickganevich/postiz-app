@@ -54,5 +54,5 @@ export default withProvider({
   SettingsComponent: VkSettings,
   CustomPreviewComponent: undefined,
   dto: VkDto,
-  maximumCharacters: 2048,
+  maximumCharacters: 16000,
 });

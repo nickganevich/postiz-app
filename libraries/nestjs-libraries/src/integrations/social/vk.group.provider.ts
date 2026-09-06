@@ -1,5 +1,3 @@
-import { Integration } from '@prisma/client';
-import { AuthService } from '@gitroom/helpers/auth/auth.service';
 import { VkProvider } from '@gitroom/nestjs-libraries/integrations/social/vk.provider';
 
 // Канал «VK Сообщество»: публикация на стену сообщества с медиа.
@@ -26,24 +24,6 @@ export class VkGroupProvider extends VkProvider {
   override async pages(accessToken: string) {
     const pages = await super.pages(accessToken);
     return pages.filter((page) => String(page.id).startsWith('-'));
-  }
-
-  // Ключ сообщества: сначала настройки канала, затем — форма подключения
-  // каналов, заведённых до перехода на VK ID (там он лежал как accessToken).
-  protected override communityKey(integration?: Integration): string | null {
-    const fromSettings = super.communityKey(integration);
-    if (fromSettings) {
-      return fromSettings;
-    }
-
-    try {
-      const legacy = JSON.parse(
-        AuthService.fixedDecryption(integration!.customInstanceDetails!)
-      );
-      return String(legacy.accessToken || '').trim() || null;
-    } catch (err) {
-      return null;
-    }
   }
 
   protected override mediaTokenHint(): string {
