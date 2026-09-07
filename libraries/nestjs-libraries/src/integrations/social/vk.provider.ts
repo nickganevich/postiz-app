@@ -347,6 +347,18 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     }
   }
 
+  // Разбирает строку вложений VK "photo-<owner>_<id>,video-<owner>_<id>"
+  // в тот же вид, что отдаёт загрузчик — чтобы дальше код был общим.
+  protected preloadedAttachments(
+    settings: VkDto
+  ): { id: string; type: string; owner: string }[] {
+    return String(settings?.attachments || '')
+      .split(',')
+      .map((item) => item.trim().match(/^(photo|video|doc)(-?\d+)_(\d+)$/))
+      .filter((m): m is RegExpMatchArray => !!m)
+      .map((m) => ({ type: m[1], owner: m[2], id: m[3] }));
+  }
+
   protected isVideo(path: string) {
     return hasExtension(path, 'mp4') || hasExtension(path, 'mov');
   }
@@ -553,8 +565,13 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
     const owner = this.ownerId(userId);
     const media = firstPost?.media || [];
 
+    const preloaded = this.preloadedAttachments(settings);
+
     if (settings.post_type === 'clip') {
-      if (media.length !== 1 || !this.isVideo(media[0].path)) {
+      const singleVideo = preloaded.length
+        ? preloaded.length === 1 && preloaded[0].type === 'video'
+        : media.length === 1 && this.isVideo(media[0].path);
+      if (!singleVideo) {
         throw new BadBody(
           this.identifier,
           '{}',
@@ -564,7 +581,13 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
       }
     }
 
-    const mediaList = media.length
+    // Готовые вложения (photo-<gid>_<id>, video-<gid>_<id>) — медиа, которое
+    // уже залито в сообщество заранее, при планировании. Тогда в момент
+    // публикации пользовательский токен не нужен вовсе: wall.post ключом
+    // сообщества крепит вложения по id.
+    const mediaList = preloaded.length
+      ? preloaded
+      : media.length
       ? await this.uploadMedia(
           userId,
           this.requireMediaToken(accessToken, integration),
