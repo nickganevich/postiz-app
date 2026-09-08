@@ -595,6 +595,23 @@ export class VkProvider extends SocialAbstract implements SocialProvider {
         )
       : [];
 
+    // Клип — короткое видео, а не запись на стене. wall.post здесь не нужен
+    // и не желателен: видео уже лежит в каталоге сообщества (video.save,
+    // wallpost=0 — см. uploadVideo), ВК сам подхватывает подходящие ролики
+    // в раздел «Клипы». Публикация на стену дублировала бы контент туда,
+    // где его не просили — этого явно не хотели.
+    if (settings.post_type === 'clip') {
+      const [video] = mediaList;
+      return [
+        {
+          id: firstPost.id,
+          postId: video.id,
+          releaseURL: `https://vk.com/video${video.owner}_${video.id}`,
+          status: 'completed',
+        },
+      ];
+    }
+
     const body = new FormData();
     body.append('message', firstPost.message || '');
     body.append('owner_id', owner);
